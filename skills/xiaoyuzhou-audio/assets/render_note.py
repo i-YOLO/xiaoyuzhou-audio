@@ -126,392 +126,190 @@ def build_html(source_path: Path, source: str) -> str:
         )
 
     return f"""<!doctype html>
-<html lang="zh-CN" data-ui-version="xiaoyuzhou-reading-v0.3">
+<html lang="zh-CN" data-ui-version="xiaoyuzhou-reading-v0.4">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="{html.escape(title)}的播客笔记阅读视图">
   <title>{html.escape(title)} · 播客笔记</title>
   <style>
+    /* 阅读页 v0.4：纸质杂志风。单栏窄宽、衬线正文、单一强调色；亮色 / 纸张 / 暗色三档主题。 */
     :root {{
       color-scheme: light;
-      --paper: #fbfcfa;
-      --surface: #ffffff;
-      --ink: #202421;
-      --muted: #68716b;
-      --line: #d9dedb;
-      --accent: #087f6b;
-      --accent-soft: #e8f5f1;
-      --warm: #9a5b13;
-      --warm-soft: #fff4df;
-      --berry: #9b4051;
-      --blue: #356b8c;
-      --max: 760px;
+      --paper: #fbf9f5;
+      --ink: #26221f;
+      --body: #3a3531;
+      --muted: #7a716a;
+      --faint: #a69d94;
+      --line: #e7e0d6;
+      --accent: #b4492f;
+      --accent-soft: #f6e9e2;
+      --code-bg: #f3eee6;
+      --selection: #f1d4c6;
+      --serif: "Songti SC", "Source Han Serif SC", "Noto Serif SC", "Noto Serif CJK SC", "Iowan Old Style", Georgia, "PingFang SC", "Microsoft YaHei", serif;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      --col: 680px;
+      --side: 188px;
+      --gap: 64px;
+      --wrap: calc(var(--side) + var(--gap) + var(--col) + 56px);
     }}
-    * {{ box-sizing: border-box; }}
-    html {{ scroll-behavior: smooth; scroll-padding-top: 96px; }}
-    body {{
-      margin: 0;
-      color: var(--ink);
-      background: var(--paper);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      font-size: 17px;
-      line-height: 1.85;
-      letter-spacing: 0;
-    }}
-    .progress {{ position: fixed; inset: 0 auto auto 0; z-index: 20; width: 0; height: 3px; background: var(--accent); }}
-    .topbar {{ border-bottom: 1px solid var(--line); background: rgba(251, 252, 250, .94); }}
-    .topbar-inner {{ max-width: 1240px; margin: auto; padding: 12px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }}
-    .brand {{ color: var(--ink); font-size: 14px; font-weight: 700; text-decoration: none; }}
-    .source-link {{ color: var(--accent); font-size: 14px; text-decoration: none; }}
-    .source-link:hover {{ text-decoration: underline; }}
-    .masthead {{ border-bottom: 1px solid var(--line); background: var(--surface); }}
-    .masthead-inner {{ max-width: 920px; margin: auto; padding: 64px 28px 52px; }}
-    .eyebrow {{ margin: 0 0 12px; color: var(--accent); font-size: 13px; font-weight: 700; text-transform: uppercase; }}
-    h1 {{ max-width: 850px; margin: 0; font-family: ui-serif, "Songti SC", STSong, serif; font-size: 58px; line-height: 1.18; font-weight: 700; }}
-    .rating {{ margin-top: 22px; color: var(--warm); font-size: 18px; font-weight: 700; }}
-    .meta {{ display: flex; flex-wrap: wrap; gap: 7px 18px; margin-top: 20px; color: var(--muted); font-size: 14px; }}
-    .tags {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }}
-    .tags span {{ padding: 3px 9px; border: 1px solid #bfd8d1; border-radius: 4px; color: #28685c; background: var(--accent-soft); font-size: 13px; }}
-    .layout {{ max-width: 1240px; margin: auto; display: grid; grid-template-columns: 240px minmax(0, var(--max)); gap: 76px; align-items: start; padding: 54px 28px 96px; }}
-    .toc {{ position: sticky; top: 28px; max-height: calc(100vh - 56px); overflow: auto; padding-right: 18px; }}
-    .toc-title {{ margin: 0 0 14px; color: var(--muted); font-size: 12px; font-weight: 700; }}
-    .toc-link {{ display: block; margin: 0 0 7px; border-left: 2px solid var(--line); padding: 3px 0 3px 12px; color: var(--muted); font-size: 13px; line-height: 1.45; text-decoration: none; }}
-    .toc-link.level-3 {{ padding-left: 24px; font-size: 12px; }}
-    .toc-link:hover, .toc-link.active {{ border-left-color: var(--accent); color: var(--accent); }}
-    article {{ min-width: 0; }}
-    article h2, article h3 {{ position: relative; font-family: ui-serif, "Songti SC", STSong, serif; letter-spacing: 0; }}
-    article h2 {{ margin: 68px 0 22px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 29px; line-height: 1.35; }}
-    article h2:first-child {{ margin-top: 0; }}
-    article h3 {{ margin: 42px 0 16px; font-size: 22px; line-height: 1.45; }}
-    article p {{ margin: 0 0 20px; }}
-    article ul, article ol {{ margin: 0 0 24px; padding-left: 1.5em; }}
-    article li {{ margin-bottom: 8px; padding-left: 4px; }}
-    article strong {{ color: #111411; }}
-    article a {{ color: var(--accent); text-underline-offset: 3px; }}
-    article blockquote {{ margin: 28px 0; border-left: 4px solid var(--warm); padding: 16px 22px; background: var(--warm-soft); color: #4f3a20; }}
-    article blockquote p:last-child {{ margin-bottom: 0; }}
-    article code {{ padding: 2px 5px; border-radius: 3px; background: #eef1ef; color: #8a3f28; font-family: "SFMono-Regular", Consolas, monospace; font-size: .88em; overflow-wrap: anywhere; }}
-    article pre {{ overflow: auto; padding: 18px; border: 1px solid var(--line); background: #f2f4f2; }}
-    article pre code {{ padding: 0; background: transparent; }}
-    article table {{ width: 100%; margin: 26px 0; border-collapse: collapse; font-size: 15px; }}
-    article th, article td {{ border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }}
-    article th {{ background: #f1f5f3; }}
-    article img {{ max-width: 100%; height: auto; }}
-    #我的感受 {{ margin-top: 0; border-top: 0; color: #7b470d; }}
-    .metadata-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; margin: 0; padding: 18px 22px 18px 42px; border: 1px solid var(--line); background: #f6f8f6; font-size: 14px; line-height: 1.55; }}
-    .metadata-grid li {{ margin: 5px 0; }}
-    #核心概念地图 {{ margin-bottom: 14px; border-top-color: #9bc9bc; color: #075e50; }}
-    #核心概念地图 + p {{ max-width: 700px; margin-bottom: 28px; color: #45534d; font-size: 18px; line-height: 1.75; }}
-    .concept-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 0 0 42px; padding: 0; list-style: none; counter-reset: concept; }}
-    .concept-card {{ position: relative; min-height: 210px; margin: 0; padding: 52px 22px 22px; overflow: hidden; border: 1px solid var(--line); border-top: 4px solid var(--accent); background: var(--surface); font-size: 15px; line-height: 1.72; counter-increment: concept; }}
-    .concept-card::before {{ content: "0" counter(concept); position: absolute; top: 15px; left: 22px; color: var(--accent); font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; font-weight: 700; }}
-    .concept-card::after {{ content: ""; position: absolute; top: -34px; right: -34px; width: 82px; height: 82px; border: 1px solid currentColor; border-radius: 50%; opacity: .12; }}
-    .concept-card:nth-child(3n + 2) {{ border-top-color: var(--warm); color: #493921; }}
-    .concept-card:nth-child(3n + 2)::before {{ color: var(--warm); }}
-    .concept-card:nth-child(3n) {{ border-top-color: var(--blue); color: #263b49; }}
-    .concept-card:nth-child(3n)::before {{ color: var(--blue); }}
-    .concept-card p {{ margin: 0; }}
-    .concept-card strong {{ display: block; margin-bottom: 10px; color: var(--ink); font-family: ui-serif, "Songti SC", STSong, serif; font-size: 20px; line-height: 1.35; }}
-    #核心结论 + p {{ margin: 0 0 38px; padding: 22px 24px; border-left: 4px solid var(--berry); background: #fbf2f4; color: #4f3037; font-family: ui-serif, "Songti SC", STSong, serif; font-size: 20px; line-height: 1.7; }}
-    #核心观点 + ol {{ padding: 0; list-style: none; counter-reset: insight; }}
-    #核心观点 + ol > li {{ position: relative; margin: 0; padding: 15px 8px 15px 46px; border-bottom: 1px solid var(--line); counter-increment: insight; }}
-    #核心观点 + ol > li::before {{ content: counter(insight, decimal-leading-zero); position: absolute; top: 18px; left: 4px; color: var(--accent); font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; font-weight: 700; }}
-    .formula {{ margin: 24px 0 28px; padding: 22px; border: 1px solid #a8c9d9; background: #edf6fa; text-align: center; }}
-    .formula code {{ padding: 0; background: transparent; color: #174f6e; font-size: 17px; font-weight: 700; }}
-    .sync-note {{ margin-top: 72px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }}
-    .mobile-toc {{ display: none; }}
-    @media (max-width: 960px) {{
-      h1 {{ font-size: 46px; }}
-      .layout {{ grid-template-columns: minmax(0, var(--max)); justify-content: center; gap: 24px; padding-top: 28px; }}
-      .toc {{ display: none; }}
-      .mobile-toc {{ display: block; margin-bottom: 34px; border: 1px solid var(--line); background: var(--surface); }}
-      .mobile-toc summary {{ cursor: pointer; padding: 12px 16px; font-size: 14px; font-weight: 700; }}
-      .mobile-toc nav {{ padding: 0 16px 12px; }}
-    }}
-    @media (max-width: 600px) {{
-      body {{ font-size: 16px; line-height: 1.78; }}
-      .topbar-inner {{ padding: 10px 18px; }}
-      .masthead-inner {{ padding: 42px 20px 36px; }}
-      h1 {{ font-size: 36px; }}
-      .layout {{ padding: 22px 20px 64px; }}
-      article h2 {{ margin-top: 54px; font-size: 25px; }}
-      article h3 {{ margin-top: 34px; font-size: 20px; }}
-      .metadata-grid, .concept-grid {{ grid-template-columns: 1fr; }}
-      .concept-card {{ min-height: 0; }}
-      #核心概念地图 + p {{ font-size: 17px; }}
-      #核心结论 + p {{ font-size: 18px; }}
-    }}
-    @media print {{
-      .progress, .topbar, .toc, .mobile-toc {{ display: none !important; }}
-      body {{ background: #fff; font-size: 11pt; }}
-      .masthead-inner, .layout {{ max-width: 100%; padding-left: 0; padding-right: 0; }}
-      .layout {{ display: block; }}
-      article h2, article h3 {{ break-after: avoid; }}
-      article a {{ color: inherit; }}
-    }}
-    /* Tutti-inspired macOS reading layer: content structure stays unchanged. */
-    :root {{
-      --paper: #edf5fb;
-      --surface: rgba(255, 255, 255, .78);
-      --ink: #18202a;
-      --muted: #66717e;
-      --line: rgba(71, 92, 116, .16);
-      --accent: #0a84ff;
-      --accent-soft: rgba(10, 132, 255, .10);
-      --warm: #b36b1e;
-      --warm-soft: rgba(255, 159, 10, .10);
-      --berry: #af4d72;
-      --blue: #2878c8;
-      --panel-shadow: 0 18px 50px rgba(43, 73, 105, .10), 0 2px 8px rgba(43, 73, 105, .06);
-      --max: 1040px;
-    }}
-    body {{
-      min-height: 100vh;
-      background:
-        radial-gradient(circle at 8% 0%, rgba(131, 196, 255, .28), transparent 31rem),
-        radial-gradient(circle at 94% 20%, rgba(255, 222, 188, .32), transparent 34rem),
-        linear-gradient(180deg, #eef6fc 0%, #f7fafc 44%, #edf3f7 100%);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      font-size: 17px;
-      line-height: 1.82;
-      letter-spacing: -.006em;
-    }}
-    .topbar {{
-      position: sticky;
-      top: 12px;
-      z-index: 18;
-      border: 0;
-      background: transparent;
-    }}
-    .topbar-inner {{
-      width: calc(100% - 32px);
-      max-width: 1320px;
-      margin: auto;
-      padding: 10px 12px 10px 18px;
-      border: 1px solid rgba(255, 255, 255, .72);
-      border-radius: 18px;
-      background: rgba(248, 251, 254, .72);
-      box-shadow: 0 10px 32px rgba(48, 74, 102, .10);
-      backdrop-filter: blur(24px) saturate(1.45);
-      -webkit-backdrop-filter: blur(24px) saturate(1.45);
-    }}
-    .brand {{ display: inline-flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 720; letter-spacing: -.01em; }}
-    .brand::before {{ content: ""; width: 9px; height: 9px; border-radius: 50%; background: #32d74b; box-shadow: 0 0 0 5px rgba(50, 215, 75, .11); }}
-    .topbar-actions {{ display: flex; align-items: center; gap: 7px; }}
-    .source-link, .theme-toggle {{
-      border: 1px solid rgba(72, 94, 119, .12);
-      border-radius: 11px;
-      padding: 7px 11px;
-      color: #27679e;
-      background: rgba(255, 255, 255, .58);
-      font: 650 12px/1.2 inherit;
-      text-decoration: none;
-    }}
-    .source-link:hover, .theme-toggle:hover {{ border-color: rgba(10, 132, 255, .28); background: rgba(10, 132, 255, .08); text-decoration: none; }}
-    .theme-toggle {{ width: 32px; height: 32px; padding: 0; cursor: pointer; color: var(--ink); }}
-    .masthead {{ border: 0; background: transparent; }}
-    .masthead-inner {{ max-width: 1320px; padding: 88px 28px 42px; }}
-    .eyebrow {{ margin-bottom: 15px; color: var(--accent); font-size: 12px; font-weight: 760; letter-spacing: .08em; }}
-    h1 {{
-      max-width: 900px;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
-      font-size: clamp(42px, 6vw, 66px);
-      line-height: 1.08;
-      font-weight: 780;
-      letter-spacing: -.045em;
-    }}
-    .meta {{ gap: 8px; margin-top: 24px; }}
-    .meta span, .meta a {{
-      border: 1px solid rgba(78, 101, 127, .12);
-      border-radius: 999px;
-      padding: 5px 10px;
-      background: rgba(255, 255, 255, .52);
-      color: var(--muted);
-      font-size: 12px;
-    }}
-    .tags {{ margin-top: 10px; }}
-    .tags span {{ color: #1769aa; background: var(--accent-soft); }}
-    .layout {{ max-width: 1320px; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; padding: 24px 28px 110px; }}
-    .toc {{
-      top: 92px;
-      padding: 18px 16px;
-      border: 1px solid rgba(255, 255, 255, .72);
-      border-radius: 20px;
-      background: rgba(255, 255, 255, .56);
-      box-shadow: 0 12px 34px rgba(45, 73, 103, .07);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-    }}
-    .toc-title {{ margin-bottom: 12px; color: #8a95a0; font-size: 11px; letter-spacing: .08em; }}
-    .toc-link {{ margin-bottom: 4px; border: 0; border-radius: 9px; padding: 6px 9px; }}
-    .toc-link.level-3 {{ padding-left: 20px; }}
-    .toc-link:hover, .toc-link.active {{ border: 0; color: #086fcf; background: rgba(10, 132, 255, .10); }}
-    article {{
-      padding: 46px 52px 52px;
-      border: 1px solid rgba(255, 255, 255, .82);
-      border-radius: 28px;
-      background: rgba(255, 255, 255, .76);
-      box-shadow: var(--panel-shadow);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
-    }}
-    article h2, article h3 {{
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
-      font-weight: 740;
-      letter-spacing: -.025em;
-    }}
-    article h2 {{ margin-top: 64px; border-top-color: rgba(72, 94, 119, .13); font-size: 28px; }}
-    article h3 {{ font-size: 21px; }}
-    article p {{ margin-bottom: 19px; }}
-    article a {{ color: #0878db; text-decoration-thickness: 1px; }}
-    article blockquote, #核心结论 + p {{
-      border: 1px solid rgba(255, 159, 10, .16);
-      border-left: 4px solid var(--warm);
-      border-radius: 16px;
-      background: rgba(255, 248, 236, .76);
-    }}
-    article pre, .formula {{ border-radius: 16px; }}
-    article table {{
-      display: block;
-      overflow-x: auto;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      border-collapse: separate;
-      border-spacing: 0;
-      background: rgba(255, 255, 255, .55);
-    }}
-    article th {{ background: rgba(10, 132, 255, .07); }}
-    .metadata-grid {{
-      border-color: rgba(72, 94, 119, .13);
-      border-radius: 18px;
-      background: rgba(236, 244, 250, .66);
-    }}
-    .concept-grid {{ gap: 12px; }}
-    .concept-card {{
-      min-height: 190px;
-      border: 1px solid rgba(72, 94, 119, .13);
-      border-top: 1px solid rgba(72, 94, 119, .13);
-      border-radius: 19px;
-      background: rgba(255, 255, 255, .68);
-      box-shadow: 0 8px 22px rgba(43, 73, 105, .06);
-    }}
-    .concept-card::after {{ border: 0; background: var(--accent-soft); }}
-    .concept-card strong {{ font-family: inherit; font-weight: 730; }}
-    #核心结论 + p {{ border-left-color: var(--accent); background: rgba(229, 242, 255, .70); color: #244966; font-family: inherit; }}
-    .progress {{ height: 2px; background: linear-gradient(90deg, #0a84ff, #5ac8fa); }}
-    .sync-note {{ opacity: .72; }}
-    .dashboard-band {{ border: 0; background: transparent; }}
-    .dashboard-inner {{ max-width: 1160px; padding: 12px 28px 34px; }}
-    .metric-strip {{ gap: 12px; border: 0; background: transparent; }}
-    .metric {{
-      min-height: 140px;
-      border: 1px solid rgba(255, 255, 255, .78) !important;
-      border-radius: 20px;
-      background: rgba(255, 255, 255, .64);
-      box-shadow: 0 10px 28px rgba(43, 73, 105, .07);
-      backdrop-filter: blur(16px);
-    }}
-    .metric.primary {{ color: #f7fbff; background: linear-gradient(145deg, #0a84ff, #0969c7); }}
-    .metric.primary span, .metric.primary small {{ color: rgba(255, 255, 255, .76); }}
-    .visual-grid {{ gap: 12px; margin-top: 12px; }}
-    .viz-panel, .topic-map {{
-      border: 1px solid rgba(255, 255, 255, .78);
-      border-radius: 22px;
-      background: rgba(255, 255, 255, .64);
-      box-shadow: 0 10px 28px rgba(43, 73, 105, .07);
-      backdrop-filter: blur(16px);
-    }}
-    .viz-panel h2, .topic-map h2, .topic-node span {{ font-family: inherit; }}
-    .rating-panel {{ color: #f7fbff; background: linear-gradient(150deg, #147dd6, #58a9ec); }}
-    .rating-panel .panel-index, .rating-panel header p {{ color: rgba(255, 255, 255, .70); }}
-    .topic-map {{ margin-top: 12px; background: rgba(25, 34, 45, .88); }}
-    .topic-nodes {{ gap: 8px; border: 0; background: transparent; }}
-    .topic-node {{ border-radius: 15px; background: rgba(255, 255, 255, .08); }}
-    .topic-node:hover {{ background: rgba(10, 132, 255, .22); }}
-    .library-home .masthead {{ color: var(--ink); background: transparent; }}
-    .library-home .masthead-inner {{ min-height: 320px; padding: 90px 28px 46px; }}
-    .library-home .eyebrow {{ color: var(--accent); }}
-    .library-home .masthead-copy, .library-home .masthead .meta {{ color: var(--muted); }}
-    .library-home .layout {{ max-width: 1320px; grid-template-columns: 210px minmax(0, 1fr); gap: 32px; padding-top: 24px; }}
-    .library-home article {{ padding: 38px 42px 46px; }}
-    @media (prefers-color-scheme: dark) {{
-      :root:not([data-theme="light"]) {{ color-scheme: dark; }}
+    :root[data-theme="paper"] {{
+      --paper: #f2e9d8;
+      --ink: #2f2518;
+      --body: #43382a;
+      --muted: #6f6350;
+      --faint: #9a8d76;
+      --line: #ddd0b6;
+      --accent: #a23b22;
+      --accent-soft: #ead9c0;
+      --code-bg: #eadfc8;
+      --selection: #e3c9a8;
     }}
     :root[data-theme="dark"] {{
       color-scheme: dark;
-      --paper: #111820;
-      --surface: rgba(30, 39, 49, .82);
-      --ink: #edf3f8;
-      --muted: #9da9b5;
-      --line: rgba(202, 218, 233, .13);
-      --accent-soft: rgba(10, 132, 255, .18);
-      --warm-soft: rgba(255, 159, 10, .13);
+      --paper: #171514;
+      --ink: #f0eae2;
+      --body: #d9d2c9;
+      --muted: #9b9188;
+      --faint: #70675f;
+      --line: #2e2926;
+      --accent: #e5906f;
+      --accent-soft: #2c211c;
+      --code-bg: #24201d;
+      --selection: #5a3a2c;
     }}
-    :root[data-theme="dark"] body {{
-      background:
-        radial-gradient(circle at 8% 0%, rgba(25, 99, 157, .25), transparent 31rem),
-        radial-gradient(circle at 94% 20%, rgba(113, 76, 45, .22), transparent 34rem),
-        #111820;
+    * {{ box-sizing: border-box; }}
+    html {{ scroll-behavior: smooth; scroll-padding-top: 88px; -webkit-text-size-adjust: 100%; }}
+    body {{
+      margin: 0;
+      background: var(--paper);
+      color: var(--body);
+      font-family: var(--serif);
+      font-size: 18px;
+      line-height: 1.95;
+      -webkit-font-smoothing: antialiased;
+      transition: background-color .25s, color .25s;
     }}
-    :root[data-theme="dark"] .topbar-inner,
-    :root[data-theme="dark"] .toc,
-    :root[data-theme="dark"] article,
-    :root[data-theme="dark"] .metric,
-    :root[data-theme="dark"] .viz-panel {{
-      border-color: rgba(255, 255, 255, .09);
-      background: rgba(29, 38, 48, .74);
+    ::selection {{ background: var(--selection); }}
+    a {{ text-underline-offset: 4px; }}
+
+    .progress {{ position: fixed; top: 0; left: 0; z-index: 30; width: 0; height: 2px; background: var(--accent); }}
+
+    .topbar {{ position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--line); background: var(--paper); }}
+    @supports (background: color-mix(in srgb, red 50%, blue)) {{
+      .topbar {{ background: color-mix(in srgb, var(--paper) 88%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }}
     }}
-    :root[data-theme="dark"] .source-link,
-    :root[data-theme="dark"] .theme-toggle,
-    :root[data-theme="dark"] .meta span {{ border-color: rgba(255, 255, 255, .09); background: rgba(255, 255, 255, .06); color: #9ecfff; }}
-    :root[data-theme="dark"] article strong {{ color: #fff; }}
-    :root[data-theme="dark"] article table,
-    :root[data-theme="dark"] .concept-card,
-    :root[data-theme="dark"] .metadata-grid {{ border-color: rgba(255, 255, 255, .10); background: rgba(255, 255, 255, .045); }}
-    :root[data-theme="dark"] article th {{ background: rgba(10, 132, 255, .13); }}
-    :root[data-theme="dark"] article code {{ background: rgba(255, 255, 255, .08); color: #ffb28f; }}
-    :root[data-theme="dark"] article blockquote {{ color: #f1d5ae; background: rgba(255, 159, 10, .08); }}
-    :root[data-theme="dark"] #核心结论 + p {{ color: #c8e4fb; background: rgba(10, 132, 255, .10); }}
-    @media (max-width: 960px) {{
-      .layout, .library-home .layout {{
-        grid-template-columns: minmax(0, var(--max));
-        justify-content: center;
-        gap: 24px;
-      }}
-      article {{ padding: 38px 34px 44px; }}
-      .library-home article {{ padding: 34px; }}
-      article p, article li, article a {{ overflow-wrap: anywhere; }}
+    .topbar-inner {{ max-width: var(--wrap); margin: auto; padding: 13px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }}
+    .brand {{ color: var(--muted); font: 600 13px/1 var(--sans); letter-spacing: .16em; text-decoration: none; }}
+    .topbar-actions {{ display: flex; align-items: center; gap: 16px; font-family: var(--sans); }}
+    .source-link {{ padding-bottom: 1px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.3; text-decoration: none; }}
+    .source-link:hover {{ border-color: var(--accent); color: var(--accent); }}
+    .theme-toggle {{ min-width: 52px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: 500 12px/1 var(--sans); cursor: pointer; }}
+    .theme-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
+    .source-link:focus-visible, .theme-toggle:focus-visible, .toc-link:focus-visible, .mobile-toc summary:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 3px; }}
+
+    .masthead-inner {{ max-width: var(--wrap); margin: auto; padding: 76px 28px 48px; display: grid; grid-template-columns: var(--side) minmax(0, var(--col)); column-gap: var(--gap); }}
+    .masthead-inner > * {{ grid-column: 2; }}
+    .eyebrow {{ margin: 0 0 20px; color: var(--accent); font: 600 12px/1 var(--sans); letter-spacing: .22em; }}
+    h1 {{ margin: 0; color: var(--ink); font-family: var(--serif); font-size: clamp(30px, 4.4vw, 44px); line-height: 1.32; font-weight: 700; letter-spacing: .01em; text-wrap: balance; overflow-wrap: anywhere; }}
+    .meta {{ margin-top: 26px; color: var(--muted); font: 400 14px/1.9 var(--sans); }}
+    .meta > * {{ display: inline; }}
+    .meta > * + *::before {{ content: "·"; margin: 0 .65em; color: var(--faint); text-decoration: none; }}
+    .meta a {{ color: var(--accent); text-decoration: none; }}
+    .meta a:hover {{ text-decoration: underline; }}
+
+    .layout {{ max-width: var(--wrap); margin: auto; padding: 12px 28px 120px; display: grid; grid-template-columns: var(--side) minmax(0, var(--col)); column-gap: var(--gap); align-items: start; }}
+    .toc {{ position: sticky; top: 84px; max-height: calc(100vh - 112px); overflow: auto; padding-top: 6px; font-family: var(--sans); }}
+    .toc-title {{ margin: 0 0 14px; color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .2em; }}
+    .toc-link {{ display: block; padding: 5px 0 5px 14px; border-left: 2px solid transparent; color: var(--muted); font-size: 13px; line-height: 1.5; text-decoration: none; transition: color .15s, border-color .15s; }}
+    .toc-link.level-2 {{ margin-top: 12px; color: var(--ink); font-weight: 600; }}
+    .toc-title + .toc-link.level-2 {{ margin-top: 0; }}
+    .toc-link.level-3 {{ padding-left: 24px; }}
+    .toc-link:hover {{ color: var(--accent); }}
+    .toc-link.active {{ border-left-color: var(--accent); color: var(--accent); }}
+
+    article {{ min-width: 0; }}
+    article p {{ margin: 0 0 1.15em; text-wrap: pretty; overflow-wrap: anywhere; }}
+    article h2 {{ display: flex; align-items: center; gap: 16px; margin: 76px 0 30px; color: var(--accent); font: 600 13px/1.4 var(--sans); letter-spacing: .26em; }}
+    article h2::after {{ content: ""; flex: 1; height: 1px; background: var(--line); }}
+    article > h2:first-of-type {{ margin-top: 8px; }}
+    article h3 {{ margin: 58px 0 16px; color: var(--ink); font-family: var(--serif); font-size: 24px; line-height: 1.5; font-weight: 700; letter-spacing: .005em; }}
+    article h2 + h3 {{ margin-top: 0; }}
+    article h4 {{ margin: 34px 0 10px; color: var(--ink); font-size: 18px; line-height: 1.5; }}
+    article ul, article ol {{ margin: 0 0 1.3em; padding-left: 1.4em; }}
+    article li {{ margin-bottom: .45em; padding-left: 2px; }}
+    article li::marker {{ color: var(--accent); }}
+    article strong {{ color: var(--ink); font-weight: 700; }}
+    article a {{ color: var(--accent); text-decoration-thickness: 1px; }}
+    article blockquote {{ margin: 1.8em 0; padding: 2px 0 2px 22px; border-left: 2px solid var(--accent); color: var(--muted); }}
+    article blockquote p:last-child {{ margin-bottom: 0; }}
+    article code {{ padding: .12em .38em; border-radius: 5px; background: var(--code-bg); color: var(--ink); font: .86em var(--mono); overflow-wrap: anywhere; }}
+    article pre {{ overflow: auto; margin: 1.6em 0; padding: 16px 18px; border-radius: 10px; background: var(--code-bg); font-size: 14px; line-height: 1.7; }}
+    article pre code {{ padding: 0; background: transparent; font-size: inherit; }}
+    article table {{ display: block; overflow-x: auto; width: 100%; margin: 1.8em 0; border-collapse: collapse; font: 15px/1.7 var(--sans); }}
+    article th, article td {{ padding: 10px 16px 10px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }}
+    article th {{ border-bottom: 1.5px solid var(--ink); color: var(--ink); font-size: 13px; font-weight: 600; white-space: nowrap; }}
+    article hr {{ margin: 3em 0; border: 0; border-top: 1px solid var(--line); }}
+    article img {{ max-width: 100%; height: auto; border-radius: 8px; }}
+    article p.formula {{ margin: 1.6em 0; padding: 18px 20px; border-radius: 10px; background: var(--accent-soft); text-align: center; }}
+    article p.formula code {{ padding: 0; background: transparent; color: var(--accent); font-size: 16px; font-weight: 600; }}
+
+    /* 核心结论：摘要式引言，不使用卡片与色块 */
+    #核心结论 + p {{ position: relative; margin: 0 0 8px; color: var(--ink); font-size: 21px; line-height: 1.85; font-weight: 500; }}
+    #核心结论 + p::before {{ content: "\\201C"; display: block; height: 30px; margin-bottom: 2px; color: var(--accent); font: 700 72px/1 var(--serif); }}
+
+    .sync-note {{ margin-top: 80px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--faint); font: 12px/1.6 var(--sans); }}
+    .mobile-toc {{ display: none; }}
+
+    @media (max-width: 900px) {{
+      :root {{ --gap: 0px; }}
+      .topbar-inner {{ padding: 12px 24px; }}
+      .masthead-inner, .layout {{ grid-template-columns: minmax(0, var(--col)); justify-content: center; }}
+      .masthead-inner > * {{ grid-column: 1; }}
+      .masthead-inner {{ padding: 52px 24px 30px; }}
+      .layout {{ padding: 8px 24px 88px; }}
+      .toc {{ display: none; }}
+      .mobile-toc {{ display: block; margin: 0 0 40px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-family: var(--sans); }}
+      .mobile-toc summary {{ padding: 12px 0; color: var(--muted); font-size: 13px; cursor: pointer; }}
+      .mobile-toc nav {{ padding: 0 0 10px; }}
     }}
     @media (max-width: 600px) {{
-      .topbar {{ top: 8px; }}
-      .topbar-inner {{ width: calc(100% - 20px); padding-left: 13px; border-radius: 15px; }}
-      .source-link {{ display: none; }}
-      .masthead-inner {{ padding: 62px 20px 28px; }}
-      h1 {{ font-size: 38px; }}
-      .layout {{ padding: 14px 12px 64px; }}
-      article, .library-home article {{ padding: 28px 20px 36px; border-radius: 22px; }}
-      .metric-strip {{ grid-template-columns: repeat(2, 1fr); }}
-      .metric {{ min-height: 118px; padding: 16px; }}
-      .visual-grid {{ grid-template-columns: 1fr; }}
-      .topic-nodes {{ grid-template-columns: repeat(2, 1fr); }}
+      body {{ font-size: 17px; line-height: 1.9; }}
+      .topbar-inner {{ padding: 11px 20px; }}
+      .topbar-actions {{ gap: 12px; }}
+      .masthead-inner {{ padding: 40px 20px 26px; }}
+      .layout {{ padding: 4px 20px 72px; }}
+      .meta {{ margin-top: 20px; }}
+      article h2 {{ margin: 60px 0 24px; }}
+      article h3 {{ margin: 46px 0 14px; font-size: 21px; }}
+      #核心结论 + p {{ font-size: 19px; }}
+      #核心结论 + p::before {{ height: 26px; font-size: 60px; }}
     }}
-    :root {{ --paper: #F5F7FB; --surface: #FFFFFF; --ink: #1F2937;
-      --muted: #64748B; --accent: #2563EB; --accent-soft: #EFF6FF; --line: #E2E8F0; }}
-    body {{ background: var(--paper); }}
-    .topbar-inner, .toc, article {{ background: var(--surface); border-color: var(--line); }}
-    .source-link, .eyebrow, .toc-link.active, .source-information a {{ color: var(--accent); }}
-    .metadata-grid, .concept-card {{ background: #F8FAFC; border-color: var(--line); }}
-    article strong {{ color: var(--ink); }}
-    :root[data-theme="dark"] {{ --paper: #0F172A; --surface: #172033;
-      --ink: #E5E7EB; --muted: #A8B3C5; --accent: #60A5FA;
-      --accent-soft: #1D3358; --line: #2B3B55; }}
-    :root[data-theme="dark"] body {{ background: var(--paper); }}
-    :root[data-theme="dark"] .topbar-inner, :root[data-theme="dark"] .toc,
-    :root[data-theme="dark"] article {{ background: var(--surface); border-color: var(--line); }}
-    :root[data-theme="dark"] .metadata-grid, :root[data-theme="dark"] .concept-card {{
-      background: #1C2940; border-color: var(--line); }}
+    @media (prefers-reduced-motion: reduce) {{
+      html {{ scroll-behavior: auto; }}
+      body, .toc-link {{ transition: none; }}
+    }}
+    @media print {{
+      :root, :root[data-theme] {{ --paper: #fff; --ink: #000; --body: #111; --muted: #444; --line: #bbb; --accent: #000; --code-bg: #f2f2f2; color-scheme: light; }}
+      .progress, .topbar, .toc, .mobile-toc {{ display: none !important; }}
+      body {{ background: #fff; font-size: 11pt; line-height: 1.8; }}
+      .masthead-inner, .layout {{ display: block; max-width: none; padding-left: 0; padding-right: 0; }}
+      article h2, article h3 {{ break-after: avoid; }}
+      article a {{ color: inherit; text-decoration: none; }}
+      #核心结论 + p::before {{ color: #000; }}
+    }}
   </style>
+  <script>
+    (function () {{
+      var theme;
+      try {{ theme = localStorage.getItem('xiaoyuzhou-reading-theme'); }} catch (error) {{}}
+      if (theme !== 'light' && theme !== 'paper' && theme !== 'dark') {{
+        theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }}
+      document.documentElement.dataset.theme = theme;
+    }})();
+  </script>
 </head>
 <body class="{body_class}">
   <div class="progress" aria-hidden="true"></div>
@@ -520,7 +318,7 @@ def build_html(source_path: Path, source: str) -> str:
       <span class="brand">播客笔记</span>
       <div class="topbar-actions">
         <a class="source-link" href="{source_href}">查看 Markdown</a>
-        <button class="theme-toggle" type="button" aria-label="切换明暗主题" title="切换明暗主题">◐</button>
+        <button class="theme-toggle" type="button" aria-label="切换阅读主题" title="切换阅读主题：亮色 / 纸张 / 暗色">亮色</button>
       </div>
     </div>
   </header>
@@ -544,15 +342,18 @@ def build_html(source_path: Path, source: str) -> str:
     const links = [...document.querySelectorAll('.toc-link')];
     const headings = links.map(link => document.getElementById(decodeURIComponent(link.hash.slice(1)))).filter(Boolean);
     const themeToggle = document.querySelector('.theme-toggle');
-    try {{
-      const savedTheme = localStorage.getItem('xiaoyuzhou-reading-theme');
-      document.documentElement.dataset.theme = savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-    }} catch (error) {{}}
-    themeToggle?.addEventListener('click', () => {{
-      const current = document.documentElement.dataset.theme;
-      const systemDark = matchMedia('(prefers-color-scheme: dark)').matches;
-      const next = current ? (current === 'dark' ? 'light' : 'dark') : (systemDark ? 'light' : 'dark');
+    const themes = [['light', '亮色'], ['paper', '纸张'], ['dark', '暗色']];
+    function showTheme() {{
+      const index = Math.max(0, themes.findIndex(item => item[0] === document.documentElement.dataset.theme));
+      themeToggle.textContent = themes[index][1];
+      themeToggle.setAttribute('aria-label', '切换阅读主题，当前' + themes[index][1]);
+      return index;
+    }}
+    showTheme();
+    themeToggle.addEventListener('click', () => {{
+      const next = themes[(showTheme() + 1) % themes.length][0];
       document.documentElement.dataset.theme = next;
+      showTheme();
       try {{ localStorage.setItem('xiaoyuzhou-reading-theme', next); }} catch (error) {{}}
     }});
     function updateReadingState() {{

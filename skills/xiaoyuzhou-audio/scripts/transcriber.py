@@ -205,8 +205,7 @@ def write_outputs(workspace, episode_id, title, segments, status):
              "segments_jsonl": directory / f"{episode_id}-segments.jsonl",
              "srt": directory / f"{episode_id}-transcript.srt"}
     lines = [f"[{format_time(s['start'])} - {format_time(s['end'])}] {s['text']}" for s in segments]
-    atomic_text(paths["markdown"], f"# {title} 转写稿\n\n- 转写方式：{status['model']}\n"
-                "- 说明：完整来源处理不等于识别准确；机器转写未经逐句校对。\n\n" + "\n\n".join(lines) + "\n")
+    atomic_text(paths["markdown"], f"# {title} 转写稿\n\n- 转写方式：{status['model']}\n\n" + "\n\n".join(lines) + "\n")
     atomic_text(paths["text"], "\n".join(lines) + "\n")
     atomic_text(paths["segments_jsonl"], "".join(json.dumps({"index": i, **s}, ensure_ascii=False) + "\n"
                                                    for i, s in enumerate(segments, 1)))

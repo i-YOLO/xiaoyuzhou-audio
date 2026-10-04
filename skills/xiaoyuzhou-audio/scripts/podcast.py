@@ -33,7 +33,7 @@ from urllib import error, parse, request
 import uuid
 import xml.etree.ElementTree as ET
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 DEFAULT_RSSHUB = "https://rsshub.bestblogs.dev"
 MAX_FEED_BYTES = 8 * 1024 * 1024
 MAX_CATALOG_BYTES = 32 * 1024 * 1024

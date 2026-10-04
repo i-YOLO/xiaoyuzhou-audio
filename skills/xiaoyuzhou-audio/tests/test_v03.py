@@ -29,6 +29,20 @@ def full_episode(index=1, paid=False):
     return row
 
 
+def long_episode(seconds=3600, text="长节目的合成内容。"):
+    row = full_episode()
+    row["duration_seconds"] = seconds
+    row["public_transcript"] = {"complete": True, "audio_processed_seconds": seconds,
+                                "segments": [{"start": 0, "end": seconds - 1, "text": text}]}
+    return row
+
+
+def timed_note(row, stamps, body="这一段讲了具体的内容。"):
+    topics = "\n\n".join(f"### {i}. 主题{i}（{stamp}）\n\n{body}" for i, stamp in enumerate(stamps, 1))
+    return (f"# {row['title']}\n\n测试频道 · 2026-10-01 · 01:00:00 · [原文]({row['page_url']})\n\n"
+            f"## 核心结论\n\n一个讲清楚主问题的结论。\n\n## 内容提炼\n\n{topics}\n")
+
+
 def valid_note(row):
     return f"""# {row['title']}
 
@@ -40,11 +54,11 @@ def valid_note(row):
 
 ## 内容提炼
 
-### 1. 理解讨论的问题
+### 1. 理解讨论的问题（00:00:05）
 
 观点成立需要条件，案例用来解释机制，不能代替证据。
 
-### 2. 从理解走向行动
+### 2. 从理解走向行动（00:00:20）
 
 选择一个可以观察结果的小行动，再调整判断。
 """
@@ -253,6 +267,104 @@ class TestStandalone(NoteCase):
         self.assertEqual(text, "1\n00:00:00,000 --> 00:00:29,000\n完整的合成节目内容。\n")
         self.assertNotIn("核心结论", text)
         self.assertEqual(result["srt_cue_count"], 1)
+
+
+    def test_thin_note_is_rejected_against_srt_text(self):
+        row = long_episode(60, text="字" * 3000)
+        result = self.ready(row)
+        Path(result["draft_path"]).write_text(timed_note(row, ["00:00:10"]))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertEqual(final["results"][0]["error"]["code"], "note_too_thin")
+        self.assertFalse(Path(result["markdown"]).exists())
+
+    def test_overlong_note_is_rejected_against_srt_text(self):
+        row = long_episode(60, text="字" * 3000)
+        result = self.ready(row)
+        Path(result["draft_path"]).write_text(timed_note(row, ["00:00:10"], body="字" * 2000))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertEqual(final["results"][0]["error"]["code"], "note_too_long")
+        self.assertFalse(Path(result["markdown"]).exists())
+
+    def test_note_in_range_is_accepted_for_a_substantial_transcript(self):
+        row = long_episode(60, text="字" * 3000)
+        result = self.ready(row)
+        Path(result["draft_path"]).write_text(timed_note(row, ["00:00:10"], body="字" * 750))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertTrue(final["ok"], final)
+
+    def test_template_has_no_label_prefixes_to_copy(self):
+        template = (SCRIPTS.parent / "assets" / "podcast-note.md").read_text(encoding="utf-8")
+        for label in ("主张：", "支撑：", "转折与限定："):
+            self.assertNotIn(label, template)
+
+    def test_every_topic_needs_a_timestamp(self):
+        result = self.ready()
+        Path(result["draft_path"]).write_text(valid_note(full_episode()).replace("（00:00:05）", ""))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertEqual(final["results"][0]["error"]["code"], "missing_topic_timestamp")
+
+    def test_long_gap_without_a_topic_is_rejected(self):
+        row = long_episode()
+        result = self.ready(row)
+        Path(result["draft_path"]).write_text(timed_note(row, ["00:01:00", "00:50:00"]))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertEqual(final["results"][0]["error"]["code"], "note_coverage_gap")
+
+    def test_topics_spread_across_the_episode_are_accepted(self):
+        row = long_episode()
+        result = self.ready(row)
+        stamps = [f"00:{m:02d}:00" for m in (2, 10, 20, 30, 40, 50, 58)]
+        Path(result["draft_path"]).write_text(timed_note(row, stamps))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertTrue(final["ok"], final)
+
+    def test_prepare_offers_srt_derived_reading_view(self):
+        result = self.ready()
+        self.assertEqual(result["source_srt_origin"], "transcribed")
+        self.assertEqual(Path(result["source_view"]).read_text(), "[00:00:00 - 00:00:29] 完整的合成节目内容。\n")
+
+    def test_existing_srt_is_the_source_the_note_is_written_from(self):
+        first = self.ready()
+        srt = Path(first["srt"])
+        srt.parent.mkdir(parents=True)
+        corrected = "1\n00:00:00,000 --> 00:00:29,000\n用户校正后的转录内容。\n"
+        srt.write_text(corrected)
+        result = self.ready()
+        self.assertEqual(result["source_srt_origin"], "existing")
+        self.assertIn("用户校正后的转录内容。", Path(result["source_view"]).read_text())
+        self.assertNotIn("完整的合成节目内容", Path(result["source_view"]).read_text())
+        Path(result["draft_path"]).write_text(valid_note(full_episode()))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertTrue(final["ok"], final)
+        self.assertEqual(srt.read_text(), corrected)
+
+    def test_srt_edited_after_prepare_blocks_finalize(self):
+        first = self.ready()
+        srt = Path(first["srt"])
+        srt.parent.mkdir(parents=True)
+        srt.write_text("1\n00:00:00,000 --> 00:00:29,000\n用户校正后的转录内容。\n")
+        result = self.ready()
+        srt.write_text("1\n00:00:00,000 --> 00:00:29,000\n整理之后又改了。\n")
+        Path(result["draft_path"]).write_text(valid_note(full_episode()))
+        final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertEqual(final["results"][0]["error"]["code"], "srt_changed")
+        self.assertFalse(Path(result["markdown"]).exists())
+
+    def test_existing_srt_that_misses_most_of_the_audio_is_not_a_source(self):
+        row = long_episode()
+        first = self.ready(row)
+        srt = Path(first["srt"])
+        srt.parent.mkdir(parents=True)
+        srt.write_text("1\n00:00:00,000 --> 00:10:00,000\n只有开头十分钟。\n")
+        result = self.ready(row)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "srt_incomplete")
+        self.assertIn("只有开头十分钟", srt.read_text())
+
+    def test_transcript_files_carry_no_commentary_about_accuracy(self):
+        result = self.ready()
+        for key in ("markdown", "text"):
+            self.assertNotIn("识别准确", Path(result["transcripts"][key]).read_text())
 
     def test_srt_failure_rolls_back_both_new_note_files(self):
         result = self.ready()

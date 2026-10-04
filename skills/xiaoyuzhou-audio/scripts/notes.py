@@ -22,6 +22,12 @@ import transcriber as t
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
 SECTIONS = ("核心结论", "内容提炼")
+SRT_TAIL_GRACE = 180        # seconds of trailing music or silence an existing SRT may leave uncovered
+MIN_NOTE_RATIO = .10        # a new note must carry at least this share of the SRT's text ...
+MAX_NOTE_RATIO = .30        # ... and no more than this; a note is a condensation, not a rewrite
+RATIO_FLOOR_CHARS = 2000    # transcripts shorter than this are too small for the upper bound to mean anything
+MAX_TOPIC_GAP = 12 * 60     # longest stretch of the episode that may pass without a topic
+TOPIC_TIME = re.compile(r"(?<!\d)(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?!\d)")
 
 
 def write_json(path, value):
@@ -177,6 +183,53 @@ def validate_srt(path, duration, p):
     return len(rows)
 
 
+def srt_cues(path):
+    """Cues of an SRT that validate_srt already accepted: (start, end, text) in seconds."""
+    text = Path(path).read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\r", "\n").strip()
+    cues = []
+    for row in re.split(r"\n\s*\n", text):
+        lines = row.splitlines()
+        v = [int(x) for x in re.fullmatch(
+            r"(\d{2,}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2,}):(\d{2}):(\d{2}),(\d{3})", lines[1]).groups()]
+        cues.append((v[0] * 3600 + v[1] * 60 + v[2] + v[3] / 1000,
+                     v[4] * 3600 + v[5] * 60 + v[6] + v[7] / 1000, " ".join(x.strip() for x in lines[2:])))
+    return cues
+
+
+def adopt_source_srt(job, status, md, p):
+    """The SRT is the only source a note is written from; an existing one in the output folder wins."""
+    target = md.with_suffix(".srt")
+    duration = status["audio_duration_seconds"]
+    if target.exists() or target.is_symlink():
+        validate_srt(target, duration, p)
+        source, origin = target, "existing"
+        if srt_cues(source)[-1][1] < duration - max(SRT_TAIL_GRACE, duration * .05):
+            raise p.SkillError("srt_incomplete", "目录中已有的 SRT 没有覆盖整期音频，不能作为整理来源；请核对或移走该文件后重新 prepare。")
+    else:
+        source, origin = cached_srt(job, status, p), "transcribed"
+        validate_srt(source, duration, p)
+    directory = job / "assets" / "transcripts"
+    copy, view = directory / f"{status['episode_id']}-source.srt", directory / f"{status['episode_id']}-source.txt"
+    directory.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, copy)
+    t.atomic_text(view, "".join(f"[{t.format_time(a)} - {t.format_time(b)}] {x}\n" for a, b, x in srt_cues(copy)))
+    return {"source_srt": copy.relative_to(job).as_posix(), "source_srt_sha256": t.digest(copy),
+            "source_srt_origin": origin, "source_view": view.relative_to(job).as_posix()}
+
+
+def source_srt_path(job, manifest, status, target, p):
+    relative = manifest.get("source_srt")
+    if not relative:  # caches prepared before the SRT became the note source
+        return cached_srt(job, status, p)
+    path = cached_path(job, relative, p)
+    if not path.is_file() or t.digest(path) != manifest["source_srt_sha256"]:
+        raise p.SkillError("srt_changed", "整理所依据的 SRT 已改变，请重新 prepare。")
+    if manifest.get("source_srt_origin") == "existing" and (
+            not target.is_file() or t.digest(target) != manifest["source_srt_sha256"]):
+        raise p.SkillError("srt_changed", "交付目录中的 SRT 与整理时依据的版本不同，请重新 prepare，按最新 SRT 整理。")
+    return path
+
+
 def backfill_srt(job, manifest, status, md, html, p):
     target = md.with_suffix(".srt")
     if target.exists() or target.is_symlink():
@@ -280,6 +333,7 @@ def prepare(args, p):
                 write_json(job / "prepared.json", manifest)
                 results.append({**base, **backfill_srt(job, manifest, status, md, html, p)})
                 continue
+            manifest.update(adopt_source_srt(job, status, md, p))
             draft = job / "draft.md"
             # Reuse unfinished work only for the same target and update intent.
             old_path = job / "prepared.json"
@@ -291,6 +345,8 @@ def prepare(args, p):
             results.append({**base, "ok": True, "status": "ready_for_note", "draft_path": str(draft),
                 "shownotes_path": str(job / "shownotes.md"), "output_dir": str(md.parent),
                 "markdown": str(md), "html": str(html), "srt": str(md.with_suffix(".srt")), "model": status["model"],
+                "source_view": str(cached_path(job, manifest["source_view"], p)),
+                "source_srt_origin": manifest["source_srt_origin"],
                 "coverage_seconds": status["audio_processed_seconds"],
                 "transcripts": {k: str(cached_path(job, v, p)) for k, v in status["outputs"].items()}})
         except (p.SkillError, t.TranscriptionError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -334,7 +390,39 @@ def structural_source(source):
     return "\n".join(lines)
 
 
-def validate_note(source, manifest, p):
+def seconds_in(heading):
+    match = TOPIC_TIME.search(heading)
+    return int(match[1] or 0) * 3600 + int(match[2]) * 60 + int(match[3]) if match else None
+
+
+def check_depth(visible, cues, duration, p):
+    """New notes must stand in for listening: enough substance, and every stretch of the episode covered."""
+    parts = sections(visible)
+    note_chars = len(re.findall(r"\w", "\n".join(parts[name] for name in SECTIONS)))
+    source_chars = len(re.findall(r"\w", " ".join(cue[2] for cue in cues)))
+    if note_chars < source_chars * MIN_NOTE_RATIO:
+        raise p.SkillError("note_too_thin", f"笔记只有 SRT 文字量的 {note_chars * 100 // max(source_chars, 1)}%，"
+                           f"至少需要 {int(MIN_NOTE_RATIO * 100)}%；按时间窗口逐段补写主题。")
+    if source_chars >= RATIO_FLOOR_CHARS and note_chars > source_chars * MAX_NOTE_RATIO:
+        raise p.SkillError("note_too_long", f"笔记已达 SRT 文字量的 {note_chars * 100 // source_chars}%，"
+                           f"不应超过 {int(MAX_NOTE_RATIO * 100)}%；合并同一话题的相邻主题，只保留主张、关键例子和原话。")
+    headings = re.findall(r"^### (.+)$", parts["内容提炼"], re.M)
+    if not headings:
+        raise p.SkillError("note_no_topics", "内容提炼需要至少一个“### 序号. 主题（时间）”主题。")
+    times = [seconds_in(h) for h in headings]
+    if None in times:
+        raise p.SkillError("missing_topic_timestamp", "每个主题标题都要带 SRT 中的起始时间，例如：### 1. 主题（00:02:20）。"
+                           f"缺少：{headings[times.index(None)]}")
+    if max(times) > duration + 60:
+        raise p.SkillError("invalid_topic_timestamp", "有主题时间超出音频总时长。")
+    marks = [0] + sorted(times) + [duration]
+    for before, after in zip(marks, marks[1:]):
+        if after - before > MAX_TOPIC_GAP:
+            raise p.SkillError("note_coverage_gap", f"{t.format_time(before)}–{t.format_time(after)} 之间没有主题，"
+                               "请补写这一段。")
+
+
+def validate_note(source, manifest, p, cues=None, duration=None):
     visible = structural_source(source)
     if not re.match(r"^# \S", visible.lstrip()):
         raise p.SkillError("missing_note_title", "笔记需要以节目标题开头。")
@@ -342,12 +430,14 @@ def validate_note(source, manifest, p):
     bodies = sections(visible)
     cursor = -1
     if not manifest.get("baseline_sha256") and any(name not in SECTIONS for name in names):
-        raise p.SkillError("unexpected_note_section", "新笔记只保留核心结论和内容提炼；必要信息融入主题。")
+        raise p.SkillError("unexpected_note_section", "新笔记只保留核心结论和内容提炼。")
     for expected in SECTIONS:
         matches = [i for i, name in enumerate(names) if name == expected]
         if len(matches) != 1 or matches[0] <= cursor or not bodies[names[matches[0]]]:
             raise p.SkillError("invalid_note_structure", f"章节缺失、空白、重复或顺序错误：{expected}")
         cursor = matches[0]
+    if cues is not None and not manifest.get("baseline_sha256"):
+        check_depth(visible, cues, duration, p)
     placeholders = set(re.findall(r"\{[^{}\n]+\}", (ASSETS / "podcast-note.md").read_text(encoding="utf-8")))
     if any(token in visible for token in placeholders):
         raise p.SkillError("unfinished_note", "笔记仍含模板占位内容。")
@@ -412,12 +502,15 @@ def publish_outputs(stage_md, stage_html, stage_srt, md, html, srt, manifest, p)
             t.atomic_text(html, before_html)
             raise
         return
-    if any(path.exists() or path.is_symlink() for path in (md, html, srt)):
+    keep_srt = manifest.get("source_srt_origin") == "existing"  # the note was written from this file; never replace it
+    if any(path.exists() or path.is_symlink() for path in ((md, html) if keep_srt else (md, html, srt))):
         raise p.SkillError("file_exists", "MD、HTML 或 SRT 已存在，未覆盖。")
     md.parent.mkdir(parents=True, exist_ok=True)
     published = []
     try:
         for stage, target in ((stage_md, md), (stage_html, html), (stage_srt, srt)):
+            if keep_srt and target == srt:
+                continue
             p.publish_without_overwrite(stage, target)
             published.append(target)
     except BaseException:
@@ -441,7 +534,9 @@ def finalize_one(draft, p):
     if manifest.get("finalized") and existing_pair(md, html, manifest["episode_id"], p):
         return backfill_srt(job, manifest, status, md, html, p)
     source = draft.read_text(encoding="utf-8")
-    validate_note(source, manifest, p)
+    srt = md.with_suffix(".srt")
+    source_srt = source_srt_path(job, manifest, status, srt, p)
+    validate_note(source, manifest, p, srt_cues(source_srt), status["audio_duration_seconds"])
     if manifest.get("baseline_sha256"):
         if not md.exists() or t.digest(md) != manifest["baseline_sha256"]:
             raise p.SkillError("note_changed", "原笔记已改变，未覆盖。")
@@ -457,8 +552,7 @@ def finalize_one(draft, p):
         stage_srt = stage_md.with_suffix(".srt")
         t.atomic_text(stage_md, source)
         render_file(stage_md, stage_html, p)
-        shutil.copy2(cached_srt(job, status, p), stage_srt)
-        srt = md.with_suffix(".srt")
+        shutil.copy2(source_srt, stage_srt)
         count = validate_srt(srt if srt.exists() else stage_srt, status["audio_duration_seconds"], p)
         publish_outputs(stage_md, stage_html, stage_srt, md, html, srt, manifest, p)
     t.atomic_text(job / "last-published.md", source)
@@ -466,8 +560,7 @@ def finalize_one(draft, p):
     write_json(job / "prepared.json", manifest)
     return {"ok": True, "status": "completed", "title": manifest["episode"]["title"],
         "markdown": str(md), "html": str(html), "srt": str(srt), "srt_cue_count": count,
-        "coverage_seconds": status["audio_processed_seconds"],
-        "model": status["model"], "limitations": "完整处理不等于逐字准确；机器识别需结合原音频核对。"}
+        "coverage_seconds": status["audio_processed_seconds"], "model": status["model"]}
 
 
 def finalize(args, p):
