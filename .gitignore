@@ -1,0 +1,34 @@
+# Python and editor caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.DS_Store
+Thumbs.db
+
+# Per-user settings, credentials and operational data
+.env
+.env.*
+private/
+.private/
+settings.json
+catalogs/
+.xiaoyuzhou-audio/
+downloads/
+validation/
+*.log
+*.part
+
+# Media is not part of the Skill source
+*.mp3
+*.m4a
+*.aac
+*.wav
+*.flac
+*.opus
+*.ogg
+*.webm
+*.mp4
