@@ -90,13 +90,13 @@ class TestStandalone(NoteCase):
         self.assertFalse(Path(result["markdown"]).exists())
         self.assertFalse(self.out.exists())
 
-    def test_exact_directory_hierarchy_and_only_two_outputs(self):
+    def test_exact_directory_hierarchy_and_three_outputs(self):
         result = self.complete()
         self.assertEqual(result["status"], "completed")
         md = Path(result["markdown"])
         self.assertEqual(md.relative_to(self.out).parts,
                          ("测试频道", "2026-10-01 - EP1 测试", "EP1 测试.md"))
-        self.assertEqual(sorted(x.name for x in md.parent.iterdir()), ["EP1 测试.html", "EP1 测试.md"])
+        self.assertEqual(sorted(x.name for x in md.parent.iterdir()), ["EP1 测试.html", "EP1 测试.md", "EP1 测试.srt"])
         self.assertEqual(list(self.out.rglob("library-index*")), [])
         self.assertEqual(list(self.out.rglob("*.json")), [])
 
@@ -247,6 +247,105 @@ class TestStandalone(NoteCase):
         self.assertEqual(repeated["status"], "exists")
         self.assertEqual((md.read_bytes(), html.read_bytes()), before)
 
+    def test_srt_is_full_transcript_not_condensed_note(self):
+        result = self.complete()
+        text = Path(result["srt"]).read_text()
+        self.assertEqual(text, "1\n00:00:00,000 --> 00:00:29,000\n完整的合成节目内容。\n")
+        self.assertNotIn("核心结论", text)
+        self.assertEqual(result["srt_cue_count"], 1)
+
+    def test_srt_failure_rolls_back_both_new_note_files(self):
+        result = self.ready()
+        Path(result["draft_path"]).write_text(valid_note(full_episode()))
+        original = p.publish_without_overwrite
+        def publish(source, target):
+            if target.suffix == ".srt":
+                raise OSError(errno.ENOSPC, "磁盘不足")
+            original(source, target)
+        with patch.object(p, "publish_without_overwrite", side_effect=publish):
+            final = n.finalize(self.args("finalize", result["draft_path"]), p)
+        self.assertFalse(final["ok"])
+        for key in ("markdown", "html", "srt"):
+            self.assertFalse(Path(result[key]).exists())
+
+    def test_legacy_cache_backfills_srt_without_touching_notes(self):
+        result = self.complete()
+        md, html, srt = [Path(result[k]) for k in ("markdown", "html", "srt")]
+        before = md.read_bytes(), html.read_bytes()
+        srt.unlink()
+        job = n.job_for(self.out, identity(1))
+        manifest = json.loads((job / "prepared.json").read_text())
+        status_path = job / manifest["transcript_status"]
+        status = json.loads(status_path.read_text())
+        (job / status["outputs"].pop("srt")).unlink()
+        status["output_hashes"].pop("srt")
+        n.write_json(status_path, status)
+        manifest["status_sha256"] = t.digest(status_path)
+        n.write_json(job / "prepared.json", manifest)
+        with patch.object(t, "Backend") as backend, patch.object(p, "download_episode") as download:
+            repeated = self.ready()
+        self.assertEqual(repeated["status"], "srt_added")
+        self.assertTrue(srt.is_file())
+        self.assertEqual((md.read_bytes(), html.read_bytes()), before)
+        backend.assert_not_called()
+        download.assert_not_called()
+
+    def test_enrich_preserves_hand_corrected_srt(self):
+        result = self.complete()
+        srt = Path(result["srt"])
+        corrected = srt.read_text().replace("完整的合成节目内容。", "用户人工校正后的内容。")
+        srt.write_text(corrected)
+        ready = self.ready(extra=("--enrich",))
+        final = n.finalize(self.args("finalize", ready["draft_path"]), p)
+        self.assertTrue(final["ok"])
+        self.assertEqual(srt.read_text(), corrected)
+
+    def test_missing_cache_can_reprepare_srt_without_changing_notes(self):
+        result = self.complete()
+        md, html, srt = [Path(result[k]) for k in ("markdown", "html", "srt")]
+        before = md.read_bytes(), html.read_bytes()
+        srt.unlink()
+        job = n.job_for(self.out, identity(1))
+        manifest = json.loads((job / "prepared.json").read_text())
+        (job / manifest["transcript_status"]).unlink()
+        repeated = self.ready()
+        self.assertEqual(repeated["status"], "srt_added")
+        self.assertTrue(srt.exists())
+        self.assertEqual((md.read_bytes(), html.read_bytes()), before)
+        self.assertEqual(self.ready()["status"], "exists")
+
+    def test_missing_only_cached_srt_rebuilds_from_verified_segments(self):
+        result = self.complete()
+        Path(result["srt"]).unlink()
+        job = n.job_for(self.out, identity(1))
+        manifest = json.loads((job / "prepared.json").read_text())
+        status = json.loads((job / manifest["transcript_status"]).read_text())
+        (job / status["outputs"]["srt"]).unlink()
+        with patch.object(t, "Backend") as backend:
+            repeated = self.ready()
+        self.assertEqual(repeated["status"], "srt_added")
+        backend.assert_not_called()
+        self.assertEqual(self.ready()["status"], "exists")
+
+    def test_existing_srt_collision_is_not_overwritten(self):
+        ready = self.ready()
+        srt = Path(ready["srt"])
+        srt.parent.mkdir(parents=True)
+        srt.write_text("1\n00:00:00,000 --> 00:00:01,000\n用户已有字幕。\n")
+        Path(ready["draft_path"]).write_text(valid_note(full_episode()))
+        final = n.finalize(self.args("finalize", ready["draft_path"]), p)
+        self.assertFalse(final["ok"])
+        self.assertIn("用户已有字幕", srt.read_text())
+        self.assertFalse(Path(ready["markdown"]).exists())
+
+    def test_invalid_existing_srt_is_reported_without_replacement(self):
+        result = self.complete()
+        srt = Path(result["srt"])
+        srt.write_text("用户写的内容，不能被覆盖")
+        repeated = self.ready()
+        self.assertEqual(repeated["status"], "failed")
+        self.assertEqual(srt.read_text(), "用户写的内容，不能被覆盖")
+
     def test_collision_does_not_overwrite(self):
         row = full_episode()
         md, html = n.output_paths(self.out, row, self.channel, p)
@@ -369,6 +468,15 @@ class TestStandalone(NoteCase):
 
 
 class TestCheckpoints(NoteCase):
+    def test_srt_millisecond_rounding_and_hour_boundary(self):
+        text = t.srt_text([{"start": .1236, "end": 1.2345, "text": "你好\n\n世界"},
+                           {"start": 3599.9996, "end": 3600.4004, "text": "下一段"}], 3601)
+        self.assertEqual(text, "1\n00:00:00,124 --> 00:00:01,235\n你好 世界\n\n2\n01:00:00,000 --> 01:00:00,400\n下一段\n")
+
+    def test_sub_millisecond_speech_still_has_valid_srt_interval(self):
+        text = t.srt_text([{"start": 0, "end": .0002, "text": "短句"}], 1)
+        self.assertIn("00:00:00,000 --> 00:00:00,001", text)
+
     def fake_backend(self):
         return types.SimpleNamespace(name="fake", model_key="model-a", label="合成后端",
                transcribe=lambda path: [{"start": 0, "end": 9, "text": "合成语音"}])

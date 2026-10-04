@@ -33,7 +33,7 @@ from urllib import error, parse, request
 import uuid
 import xml.etree.ElementTree as ET
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 DEFAULT_RSSHUB = "https://rsshub.bestblogs.dev"
 MAX_FEED_BYTES = 8 * 1024 * 1024
 MAX_CATALOG_BYTES = 32 * 1024 * 1024
@@ -1081,7 +1081,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--deadline", type=positive_int, default=1800)
     prepare.add_argument("--max-mb", type=positive_int, default=2048)
     prepare.set_defaults(name=None)
-    finalize = sub.add_parser("finalize", help="校验笔记并输出同目录 MD/HTML")
+    finalize = sub.add_parser("finalize", help="校验笔记并输出同目录 MD/HTML/SRT")
     finalize.add_argument("notes", nargs="+")
     render = sub.add_parser("render", help="从指定 Markdown 重新生成同目录 HTML")
     render.add_argument("notes", nargs="+")

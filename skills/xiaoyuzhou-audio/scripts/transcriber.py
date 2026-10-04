@@ -80,6 +80,28 @@ def format_time(value):
     return f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}"
 
 
+def srt_timestamp(milliseconds):
+    hours, remainder = divmod(milliseconds, 3600000)
+    minutes, remainder = divmod(remainder, 60000)
+    seconds, milliseconds = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+
+def srt_text(segments, duration):
+    """Export complete timed speech, never the condensed Markdown note."""
+    segments = normalize_segments(segments, duration)
+    if not segments:
+        raise TranscriptionError("empty_transcript", "完整转写没有文本，不能生成 SRT。")
+    limit = max(1, math.floor(duration * 1000 + .5))
+    cues = []
+    for index, row in enumerate(segments, 1):
+        start = min(math.floor(row["start"] * 1000 + .5), limit - 1)
+        end = min(max(math.floor(row["end"] * 1000 + .5), start + 1), limit)
+        text = " ".join(line.strip() for line in row["text"].splitlines() if line.strip())
+        cues.append(f"{index}\n{srt_timestamp(start)} --> {srt_timestamp(end)}\n{text}\n")
+    return "\n".join(cues)
+
+
 def normalize_segments(segments, duration):
     result = []
     previous = -1.0
@@ -180,13 +202,15 @@ def write_outputs(workspace, episode_id, title, segments, status):
     directory = Path(workspace) / "assets" / "transcripts"
     paths = {"markdown": directory / f"{episode_id}-transcript.md",
              "text": directory / f"{episode_id}-transcript.txt",
-             "segments_jsonl": directory / f"{episode_id}-segments.jsonl"}
+             "segments_jsonl": directory / f"{episode_id}-segments.jsonl",
+             "srt": directory / f"{episode_id}-transcript.srt"}
     lines = [f"[{format_time(s['start'])} - {format_time(s['end'])}] {s['text']}" for s in segments]
     atomic_text(paths["markdown"], f"# {title} 转写稿\n\n- 转写方式：{status['model']}\n"
                 "- 说明：完整来源处理不等于识别准确；机器转写未经逐句校对。\n\n" + "\n\n".join(lines) + "\n")
     atomic_text(paths["text"], "\n".join(lines) + "\n")
     atomic_text(paths["segments_jsonl"], "".join(json.dumps({"index": i, **s}, ensure_ascii=False) + "\n"
                                                    for i, s in enumerate(segments, 1)))
+    atomic_text(paths["srt"], srt_text(segments, status["audio_duration_seconds"]))
     status.update(schema_version=1, episode_id=episode_id, complete=True,
                   segment_count=len(segments), last_speech_end_seconds=segments[-1]["end"],
                   outputs={key: path.relative_to(workspace).as_posix() for key, path in paths.items()},

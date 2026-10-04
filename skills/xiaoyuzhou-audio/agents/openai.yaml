@@ -1,6 +1,6 @@
 interface:
   display_name: "小宇宙音频与笔记"
-  short_description: "列节目、下载免费原始音频；明确要求整理时，将完整内容写成独立 Markdown 和 HTML。"
+  short_description: "列节目、下载免费原音频；明确要求整理时，输出精简 MD、HTML 和完整 SRT 逐字稿。"
   default_prompt: "使用 $xiaoyuzhou-audio 处理我提供的小宇宙链接：按我的要求列节目、下载音频或生成 Markdown 和 HTML 笔记。"
 policy:
   allow_implicit_invocation: true

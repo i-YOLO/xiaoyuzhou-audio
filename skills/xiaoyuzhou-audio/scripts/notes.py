@@ -105,7 +105,10 @@ def validate_material(job, manifest, p):
         end = stop
     if abs(end - duration) > .1:
         raise p.SkillError("incomplete_transcript", "转写未覆盖音频结尾。")
-    for key in ("markdown", "text", "segments_jsonl"):
+    required = ["markdown", "text", "segments_jsonl"]
+    if "srt" in status["outputs"] and cached_path(job, status["outputs"]["srt"], p).is_file():
+        required.append("srt")
+    for key in required:
         path = cached_path(job, status["outputs"][key], p)
         if not path.is_file() or t.digest(path) != status["output_hashes"][key]:
             raise p.SkillError("invalid_transcript_assets", "转写资产缺失或已改变，请重新准备。")
@@ -137,6 +140,59 @@ def existing_pair(md, html, identity, p):
     return True
 
 
+def cached_srt(job, status, p):
+    """Also accepts v0.3 caches that predate the SRT output field."""
+    if status["outputs"].get("srt"):
+        source = cached_path(job, status["outputs"]["srt"], p)
+        if source.is_file():
+            return source
+    rows = [json.loads(line) for line in cached_path(job, status["outputs"]["segments_jsonl"], p).read_text(encoding="utf-8").splitlines()]
+    suffix = "rebuilt" if status["outputs"].get("srt") else "transcript"
+    path = cached_path(job, f"assets/transcripts/{status['episode_id']}-{suffix}.srt", p)
+    t.atomic_text(path, t.srt_text(rows, status["audio_duration_seconds"]))
+    return path
+
+
+def validate_srt(path, duration, p):
+    if not path.is_file() or path.is_symlink():
+        raise p.SkillError("srt_conflict", "SRT 位置不是普通文件，未覆盖。")
+    text = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\r", "\n").strip()
+    rows = re.split(r"\n\s*\n", text) if text else []
+    previous = -1
+    for index, row in enumerate(rows, 1):
+        lines = row.splitlines()
+        match = re.fullmatch(r"(\d{2,}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2,}):(\d{2}):(\d{2}),(\d{3})", lines[1]) if len(lines) >= 3 else None
+        if not match or lines[0].strip() != str(index) or not "".join(lines[2:]).strip():
+            raise p.SkillError("invalid_srt", "SRT 编号、时间戳或正文格式无效，未改写已有文件。")
+        values = [int(v) for v in match.groups()]
+        if any(values[i] >= 60 for i in (1, 2, 5, 6)):
+            raise p.SkillError("invalid_srt", "SRT 分秒超出范围。")
+        start = values[0] * 3600000 + values[1] * 60000 + values[2] * 1000 + values[3]
+        end = values[4] * 3600000 + values[5] * 60000 + values[6] * 1000 + values[7]
+        if start < previous or end <= start or end > math.floor(duration * 1000 + .5):
+            raise p.SkillError("invalid_srt", "SRT 时间戳乱序或超过原音频范围。")
+        previous = start
+    if not rows:
+        raise p.SkillError("invalid_srt", "SRT 为空，不能报告输出完成。")
+    return len(rows)
+
+
+def backfill_srt(job, manifest, status, md, html, p):
+    target = md.with_suffix(".srt")
+    if target.exists() or target.is_symlink():
+        count = validate_srt(target, status["audio_duration_seconds"], p)
+        return {"ok": True, "status": "exists", "markdown": str(md), "html": str(html),
+                "srt": str(target), "srt_cue_count": count, "srt_preserved": True}
+    source = cached_srt(job, status, p)
+    count = validate_srt(source, status["audio_duration_seconds"], p)
+    with tempfile.TemporaryDirectory(dir=job, prefix="publish-srt-") as staging:
+        staged = Path(staging) / target.name
+        shutil.copy2(source, staged)
+        p.publish_without_overwrite(staged, target)
+    return {"ok": True, "status": "srt_added", "markdown": str(md), "html": str(html),
+            "srt": str(target), "srt_cue_count": count}
+
+
 def prepare(args, p):
     targets = p.download_targets(args)
     if not targets or args.audio and len(targets) != 1:
@@ -161,10 +217,27 @@ def prepare(args, p):
                 raise p.SkillError("public_content_unverified", "节目不是已核实的免费公开内容。")
             md, html = output_paths(root, episode, channel, p)
             exists = existing_pair(md, html, identity, p)
-            if exists and not args.enrich:
-                results.append({**base, "ok": True, "status": "exists", "markdown": str(md), "html": str(html)})
-                continue
             job = job_for(root, identity)
+            if exists and not args.enrich:
+                record = job / "prepared.json"
+                if record.exists():
+                    old = json.loads(record.read_text(encoding="utf-8"))
+                    if old.get("markdown") == str(md) and old.get("html") == str(html) and old.get("episode_id") == identity:
+                        try:
+                            status = validate_material(job, old, p)
+                        except FileNotFoundError:
+                            status = None  # Re-prepare a missing cache without rewriting the finished note.
+                        except p.SkillError as exc:
+                            if exc.code != "invalid_transcript_assets":
+                                raise
+                            old_status = json.loads(cached_path(job, old["transcript_status"], p).read_text(encoding="utf-8"))
+                            if all(cached_path(job, old_status["outputs"][key], p).is_file()
+                                   for key in ("markdown", "text", "segments_jsonl")):
+                                raise  # A hash mismatch is not treated as a missing cache.
+                            status = None
+                        if status is not None:
+                            results.append({**base, **backfill_srt(job, old, status, md, html, p)})
+                            continue
             job.mkdir(parents=True, exist_ok=True)
             transcript = public_transcript(episode, job)
             if transcript is None:
@@ -202,6 +275,11 @@ def prepare(args, p):
                 "enrich": bool(args.enrich), "baseline_sha256": t.digest(md) if exists else None,
                 "html_baseline_sha256": t.digest(html) if exists else None}
             validate_material(job, manifest, p)
+            if exists and not args.enrich:
+                manifest["finalized"] = True
+                write_json(job / "prepared.json", manifest)
+                results.append({**base, **backfill_srt(job, manifest, status, md, html, p)})
+                continue
             draft = job / "draft.md"
             # Reuse unfinished work only for the same target and update intent.
             old_path = job / "prepared.json"
@@ -212,7 +290,7 @@ def prepare(args, p):
             write_json(old_path, manifest)
             results.append({**base, "ok": True, "status": "ready_for_note", "draft_path": str(draft),
                 "shownotes_path": str(job / "shownotes.md"), "output_dir": str(md.parent),
-                "markdown": str(md), "html": str(html), "model": status["model"],
+                "markdown": str(md), "html": str(html), "srt": str(md.with_suffix(".srt")), "model": status["model"],
                 "coverage_seconds": status["audio_processed_seconds"],
                 "transcripts": {k: str(cached_path(job, v, p)) for k, v in status["outputs"].items()}})
         except (p.SkillError, t.TranscriptionError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -225,7 +303,7 @@ def prepare(args, p):
             results.append({**base, "ok": False, "status": "failed", "error": stop})
     return {"ok": not any(r["status"] in {"failed", "not_attempted"} for r in results),
         "action": "prepare", "results": results, "counts": {s: sum(r["status"] == s for r in results)
-        for s in ("ready_for_note", "exists", "skipped_paid", "failed", "not_attempted")}}
+        for s in ("ready_for_note", "exists", "srt_added", "skipped_paid", "failed", "not_attempted")}}
 
 
 def sections(source):
@@ -317,7 +395,7 @@ def render_file(md, output, p):
         raise p.SkillError("render_failed", result.stderr[-2500:] or "HTML 未生成。")
 
 
-def publish_pair(stage_md, stage_html, md, html, manifest, p):
+def publish_outputs(stage_md, stage_html, stage_srt, md, html, srt, manifest, p):
     """No-clobber publication, with rollback; explicit updates also check both baselines."""
     if manifest.get("enrich") and manifest.get("baseline_sha256"):
         if (not md.is_file() or t.digest(md) != manifest["baseline_sha256"] or
@@ -327,22 +405,24 @@ def publish_pair(stage_md, stage_html, md, html, manifest, p):
         try:
             t.atomic_text(md, stage_md.read_text(encoding="utf-8"))
             t.atomic_text(html, stage_html.read_text(encoding="utf-8"))
+            if not srt.exists():
+                p.publish_without_overwrite(stage_srt, srt)
         except BaseException:
             t.atomic_text(md, before_md)
             t.atomic_text(html, before_html)
             raise
         return
-    if md.exists() or html.exists() or md.is_symlink() or html.is_symlink():
-        raise p.SkillError("file_exists", "MD 或 HTML 已存在，未覆盖。")
+    if any(path.exists() or path.is_symlink() for path in (md, html, srt)):
+        raise p.SkillError("file_exists", "MD、HTML 或 SRT 已存在，未覆盖。")
     md.parent.mkdir(parents=True, exist_ok=True)
-    published_md = False
+    published = []
     try:
-        p.publish_without_overwrite(stage_md, md)
-        published_md = True
-        p.publish_without_overwrite(stage_html, html)
+        for stage, target in ((stage_md, md), (stage_html, html), (stage_srt, srt)):
+            p.publish_without_overwrite(stage, target)
+            published.append(target)
     except BaseException:
-        if published_md:
-            md.unlink(missing_ok=True)
+        for target in reversed(published):
+            target.unlink(missing_ok=True)
         raise
 
 
@@ -359,7 +439,7 @@ def finalize_one(draft, p):
         raise p.SkillError("invalid_job", "输出路径与处理记录不一致。")
     status = validate_material(job, manifest, p)
     if manifest.get("finalized") and existing_pair(md, html, manifest["episode_id"], p):
-        return {"ok": True, "status": "exists", "markdown": str(md), "html": str(html)}
+        return backfill_srt(job, manifest, status, md, html, p)
     source = draft.read_text(encoding="utf-8")
     validate_note(source, manifest, p)
     if manifest.get("baseline_sha256"):
@@ -374,14 +454,19 @@ def finalize_one(draft, p):
     with tempfile.TemporaryDirectory(dir=job, prefix="publish-") as staging:
         stage_md = Path(staging) / md.name
         stage_html = stage_md.with_suffix(".html")
+        stage_srt = stage_md.with_suffix(".srt")
         t.atomic_text(stage_md, source)
         render_file(stage_md, stage_html, p)
-        publish_pair(stage_md, stage_html, md, html, manifest, p)
+        shutil.copy2(cached_srt(job, status, p), stage_srt)
+        srt = md.with_suffix(".srt")
+        count = validate_srt(srt if srt.exists() else stage_srt, status["audio_duration_seconds"], p)
+        publish_outputs(stage_md, stage_html, stage_srt, md, html, srt, manifest, p)
     t.atomic_text(job / "last-published.md", source)
     manifest["finalized"] = True
     write_json(job / "prepared.json", manifest)
     return {"ok": True, "status": "completed", "title": manifest["episode"]["title"],
-        "markdown": str(md), "html": str(html), "coverage_seconds": status["audio_processed_seconds"],
+        "markdown": str(md), "html": str(html), "srt": str(srt), "srt_cue_count": count,
+        "coverage_seconds": status["audio_processed_seconds"],
         "model": status["model"], "limitations": "完整处理不等于逐字准确；机器识别需结合原音频核对。"}
 
 
