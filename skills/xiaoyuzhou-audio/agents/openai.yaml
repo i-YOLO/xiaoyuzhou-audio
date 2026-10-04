@@ -1,6 +1,6 @@
 interface:
-  display_name: "小宇宙节目与音频"
-  short_description: "列出小宇宙最近或全部节目，下载选定单集或多集原始音频，标明收费并跳过付费内容。"
-  default_prompt: "使用 $xiaoyuzhou-audio 列出这个频道最近15期，标明免费和付费；使用我确认的下载目录保存我选定的免费音频。"
+  display_name: "小宇宙音频与笔记"
+  short_description: "列节目、下载免费原始音频；明确要求整理时，将完整内容写成独立 Markdown 和 HTML。"
+  default_prompt: "使用 $xiaoyuzhou-audio 处理我提供的小宇宙链接：按我的要求列节目、下载音频或生成 Markdown 和 HTML 笔记。"
 policy:
   allow_implicit_invocation: true

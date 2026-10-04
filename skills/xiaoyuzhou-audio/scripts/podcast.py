@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """List Xiaoyuzhou episodes and download explicitly selected public audio.
 
-Python 3.10+, standard library only. No transcription, login, AI API, or scheduler.
-JSON is written to stdout; progress goes to stderr. No existing file is overwritten.
+Python 3.10+. Listing/downloading use only the standard library.
+Knowledge capture loads optional local tools lazily; no AI API or scheduler.
+JSON is written to stdout; progress goes to stderr.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ from urllib import error, parse, request
 import uuid
 import xml.etree.ElementTree as ET
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_RSSHUB = "https://rsshub.bestblogs.dev"
 MAX_FEED_BYTES = 8 * 1024 * 1024
 MAX_CATALOG_BYTES = 32 * 1024 * 1024
@@ -243,7 +244,8 @@ def configuration() -> dict:
     settings = read_settings()
     return {"ok": True, "action": "config", "config_path": str(config_path()),
             "default_download_dir": str(default_download_dir()),
-            "confirmation_required": not settings["directory_confirmed"], **settings}
+            "confirmation_required": not settings["directory_confirmed"],
+            **settings}
 
 
 def resolve_output_dir(explicit: str | None) -> Path:
@@ -360,6 +362,8 @@ def resolve_episode(url: str, timeout: float) -> tuple[dict, dict]:
     if not isinstance(pid, str) or not re.fullmatch(r"[0-9a-fA-F]{24}", pid):
         raise SkillError("invalid_public_page", "单集所属频道 ID 无效。")
     episode = public_episode(value, pid.lower())
+    episode["shownotes"] = str(value.get("shownotes") or value.get("description") or "")
+    episode["public_transcript"] = value.get("transcript") if episode["access"] == "public" else None
     podcast = value.get("podcast") or {}
     if not isinstance(podcast, dict):
         podcast = {}
@@ -1055,6 +1059,32 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--timeout", type=positive_int, default=30)
     download.add_argument("--deadline", type=positive_int, default=1800)
     download.add_argument("--max-mb", type=positive_int, default=2048)
+    prepare = sub.add_parser("prepare", help="准备完整内容和笔记草稿；不是整理完成")
+    prepare.add_argument("urls", nargs="*")
+    prepare.add_argument("--catalog")
+    choice = prepare.add_mutually_exclusive_group()
+    choice.add_argument("--number", type=positive_int)
+    choice.add_argument("--numbers")
+    choice.add_argument("--id")
+    choice.add_argument("--ids")
+    choice.add_argument("--episodes")
+    choice.add_argument("--all", action="store_true")
+    prepare.add_argument("--audio", help="用户提供或已经下载的本地原音频，仅用于一集")
+    prepare.add_argument("--backend", choices=("auto", "faster", "mlx", "cpp"), default="auto")
+    prepare.add_argument("--model", help="已存在的本地模型位置；不会自动下载模型")
+    prepare.add_argument("--language", default="zh")
+    prepare.add_argument("--chunk-minutes", type=float, default=20)
+    prepare.add_argument("--prompt", default="")
+    prepare.add_argument("--enrich", action="store_true", help="用户明确要求更新已有笔记；保留手工内容")
+    prepare.add_argument("--out", help="当次下载根目录；自动拼接频道/单集目录")
+    prepare.add_argument("--timeout", type=positive_int, default=30)
+    prepare.add_argument("--deadline", type=positive_int, default=1800)
+    prepare.add_argument("--max-mb", type=positive_int, default=2048)
+    prepare.set_defaults(name=None)
+    finalize = sub.add_parser("finalize", help="校验笔记并输出同目录 MD/HTML")
+    finalize.add_argument("notes", nargs="+")
+    render = sub.add_parser("render", help="从指定 Markdown 重新生成同目录 HTML")
+    render.add_argument("notes", nargs="+")
     return parser
 
 
@@ -1064,10 +1094,15 @@ def main() -> int:
         if args.command == "doctor":
             result = doctor()
         elif args.command == "config":
-            result = configuration() if args.config_action == "show" else configure_directory(
-                str(default_download_dir()) if args.default else args.download_dir)
+            if args.config_action == "show":
+                result = configuration()
+            else:
+                result = configure_directory(str(default_download_dir()) if args.default else args.download_dir)
         elif args.command == "list":
             result = list_episodes(args)
+        elif args.command in {"prepare", "finalize", "render"}:
+            import notes
+            result = getattr(notes, args.command)(args, sys.modules[__name__])
         else:
             result = download_command(args)
         emit(result)
